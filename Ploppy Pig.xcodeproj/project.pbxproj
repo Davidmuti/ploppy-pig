@@ -18,6 +18,7 @@
 		F725E8AA2FFC05C9007E22C7 /* Ploppy_PigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F725E8A92FFC05C9007E22C7 /* Ploppy_PigTests.swift */; };
 		F725E8B42FFC05C9007E22C7 /* Ploppy_PigUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F725E8B32FFC05C9007E22C7 /* Ploppy_PigUITests.swift */; };
 		F725E8B62FFC05C9007E22C7 /* Ploppy_PigUITestsLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F725E8B52FFC05C9007E22C7 /* Ploppy_PigUITestsLaunchTests.swift */; };
+		F731CA292FFF99B9005AFF2F /* FartCloud.sks in Resources */ = {isa = PBXBuildFile; fileRef = F731CA282FFF99B9005AFF2F /* FartCloud.sks */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -52,6 +53,7 @@
 		F725E8AF2FFC05C9007E22C7 /* Ploppy PigUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Ploppy PigUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		F725E8B32FFC05C9007E22C7 /* Ploppy_PigUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Ploppy_PigUITests.swift; sourceTree = "<group>"; };
 		F725E8B52FFC05C9007E22C7 /* Ploppy_PigUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Ploppy_PigUITestsLaunchTests.swift; sourceTree = "<group>"; };
+		F731CA282FFF99B9005AFF2F /* FartCloud.sks */ = {isa = PBXFileReference; lastKnownFileType = file.sks; path = FartCloud.sks; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -106,6 +108,7 @@
 				F725E8912FFC05C2007E22C7 /* GameScene.sks */,
 				F725E8932FFC05C2007E22C7 /* Actions.sks */,
 				F725E8952FFC05C2007E22C7 /* GameScene.swift */,
+				F731CA282FFF99B9005AFF2F /* FartCloud.sks */,
 				F725E8972FFC05C2007E22C7 /* GameViewController.swift */,
 				F725E8992FFC05C2007E22C7 /* Main.storyboard */,
 				F725E89C2FFC05C8007E22C7 /* Assets.xcassets */,
@@ -239,6 +242,7 @@
 				F725E8922FFC05C2007E22C7 /* GameScene.sks in Resources */,
 				F725E89D2FFC05C8007E22C7 /* Assets.xcassets in Resources */,
 				F725E8A02FFC05C8007E22C7 /* LaunchScreen.storyboard in Resources */,
+				F731CA292FFF99B9005AFF2F /* FartCloud.sks in Resources */,
 				F725E8942FFC05C2007E22C7 /* Actions.sks in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
