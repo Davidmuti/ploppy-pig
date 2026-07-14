@@ -61,43 +61,79 @@ class GameScene: SKScene {
             CGVector(dx: 0, dy: 110)
         )
 
-        createSingleCloudPuff()
+        createCloudTrail()
+    }
+
+    private func createCloudTrail() {
+
+        let numberOfPuffs = Int.random(in: 25...30)
+
+        var trailActions: [SKAction] = []
+
+        for puffNumber in 0..<numberOfPuffs {
+
+            if puffNumber > 0 {
+                trailActions.append(
+                    SKAction.wait(forDuration: 0.06)
+                )
+            }
+
+            let createPuff = SKAction.run { [weak self] in
+                self?.createSingleCloudPuff()
+            }
+
+            trailActions.append(createPuff)
+        }
+
+        run(SKAction.sequence(trailActions))
     }
 
     private func createSingleCloudPuff() {
 
-        let puff = SKSpriteNode(imageNamed: "cloudPuff")
+        let cloudNames = ["cloudPuff1", "cloudPuff2", "cloudPuff3"]
+        let randomName = cloudNames.randomElement()!
+
+        let puff = SKSpriteNode(imageNamed: randomName)
 
         puff.position = CGPoint(
-            x: ploppy.position.x - (ploppy.frame.width * 0.42),
-            y: ploppy.position.y - 8
+            x: ploppy.position.x - 24,
+            y: ploppy.position.y - 18
         )
 
-        puff.setScale(0.025)
-
+        puff.setScale(0.015)
         puff.alpha = 0.9
-
         puff.zPosition = ploppy.zPosition - 1
 
         addChild(puff)
 
-        let moveLeft = SKAction.moveBy(
-            x: -150,
-            y: -4,
-            duration: 1.4
+        let initialPushLeft = SKAction.moveBy(
+            x: -12,
+            y: 0,
+            duration: 0.02
         )
 
+        let slowDriftLeft = SKAction.moveBy(
+            x: -138,
+            y: -4,
+            duration: 1.38
+        )
+
+        let completeMovement = SKAction.sequence([
+            initialPushLeft,
+            slowDriftLeft
+        ])
+
         let grow = SKAction.scale(
-            to: 0.11,
-            duration: 1.4
+            to: 0.20,
+            duration: 4.2
         )
 
         let fade = SKAction.fadeOut(
-            withDuration: 1.4
+            withDuration: 4.2
         )
 
         let moveGrowAndFade = SKAction.group([
-            moveLeft,
+            completeMovement,
             grow,
             fade
         ])
