@@ -108,9 +108,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private let terrainCategory: UInt32 = 1 << 1
 
     private let grassSinkBelowScreen: CGFloat = 16
-
     private let hillSinkBelowScreenFraction: CGFloat = 0.21
-
     private let grassOverlap: CGFloat = 4
 
     override func didMove(to view: SKView) {
@@ -177,13 +175,6 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             hillPhysicsBodyTemplates[hillName] =
                 physicsBody
         }
-
-        /*
-         Preserve the approved scrolling speed.
-
-         Each hill travels completely across the screen
-         in approximately two seconds.
-        */
 
         let hillTravelDistance =
             frame.width + hillSize.width
@@ -331,6 +322,44 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 grassNode.position.x =
                     rightmostEdge -
                     grassOverlap
+            }
+        }
+    }
+
+    /*
+     Keep Ploppy inside the top of the visible screen.
+
+     This is not lethal. If Ploppy reaches the limit,
+     only his upward movement is stopped.
+    */
+
+    override func didSimulatePhysics() {
+
+        guard !isGameOver else {
+            return
+        }
+
+        guard ploppy.parent != nil else {
+            return
+        }
+
+        let maximumPloppyY =
+            frame.maxY -
+            ploppy.size.height / 2
+
+        if ploppy.position.y > maximumPloppyY {
+
+            ploppy.position.y =
+                maximumPloppyY
+
+            if let physicsBody =
+                ploppy.physicsBody,
+               physicsBody.velocity.dy > 0 {
+
+                physicsBody.velocity = CGVector(
+                    dx: physicsBody.velocity.dx,
+                    dy: 0
+                )
             }
         }
     }
