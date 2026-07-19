@@ -53,7 +53,6 @@
 		F725E8AF2FFC05C9007E22C7 /* Ploppy PigUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Ploppy PigUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		F725E8B32FFC05C9007E22C7 /* Ploppy_PigUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Ploppy_PigUITests.swift; sourceTree = "<group>"; };
 		F725E8B52FFC05C9007E22C7 /* Ploppy_PigUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Ploppy_PigUITestsLaunchTests.swift; sourceTree = "<group>"; };
-		F730A56F300BBD690052F391 /* Ploppy Pig.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = "Ploppy Pig.xcodeproj"; sourceTree = SOURCE_ROOT; };
 		F731CA282FFF99B9005AFF2F /* FartCloud.sks */ = {isa = PBXFileReference; lastKnownFileType = file.sks; path = FartCloud.sks; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -112,7 +111,6 @@
 				F731CA282FFF99B9005AFF2F /* FartCloud.sks */,
 				F725E8972FFC05C2007E22C7 /* GameViewController.swift */,
 				F725E8992FFC05C2007E22C7 /* Main.storyboard */,
-				F730A56F300BBD690052F391 /* Ploppy Pig.xcodeproj */,
 				F725E89C2FFC05C8007E22C7 /* Assets.xcassets */,
 				F725E89E2FFC05C8007E22C7 /* LaunchScreen.storyboard */,
 			);
