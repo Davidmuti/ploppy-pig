@@ -10,6 +10,34 @@ import SpriteKit
 
 class GameViewController: UIViewController {
 
+    override var canBecomeFirstResponder: Bool {
+        return true
+    }
+
+    override var keyCommands: [UIKeyCommand]? {
+
+        return [
+            createGameKeyCommand(
+                input:
+                    UIKeyCommand.inputLeftArrow,
+                action:
+                    #selector(handleLeftArrow)
+            ),
+            createGameKeyCommand(
+                input:
+                    UIKeyCommand.inputUpArrow,
+                action:
+                    #selector(handleUpArrow)
+            ),
+            createGameKeyCommand(
+                input:
+                    UIKeyCommand.inputDownArrow,
+                action:
+                    #selector(handleDownArrow)
+            )
+        ]
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
 
@@ -30,6 +58,53 @@ class GameViewController: UIViewController {
         skView.showsNodeCount = true
     }
 
+    override func viewDidAppear(
+        _ animated: Bool
+    ) {
+
+        super.viewDidAppear(animated)
+        becomeFirstResponder()
+    }
+
+    private func createGameKeyCommand(
+        input: String,
+        action: Selector
+    ) -> UIKeyCommand {
+
+        let command = UIKeyCommand(
+            input: input,
+            modifierFlags: [],
+            action: action
+        )
+
+        command.wantsPriorityOverSystemBehavior =
+            true
+
+        return command
+    }
+
+    private var gameScene: GameScene? {
+
+        guard let skView =
+            view as? SKView else {
+            return nil
+        }
+
+        return skView.scene as? GameScene
+    }
+
+    @objc private func handleLeftArrow() {
+        gameScene?.handleFartInput()
+    }
+
+    @objc private func handleUpArrow() {
+        gameScene?.handleUpperRightPooInput()
+    }
+
+    @objc private func handleDownArrow() {
+        gameScene?.handleLowerRightPooInput()
+    }
+
     override var supportedInterfaceOrientations:
         UIInterfaceOrientationMask {
 
@@ -40,3 +115,4 @@ class GameViewController: UIViewController {
         return true
     }
 }
+

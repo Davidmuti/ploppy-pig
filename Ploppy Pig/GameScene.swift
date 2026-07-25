@@ -1,10 +1,20 @@
+
+
+
 import SpriteKit
 
 class GameScene: SKScene, SKPhysicsContactDelegate {
 
+    private enum AppleCoreLane {
+        case low
+        case middle
+        case high
+    }
+
     private let ploppy = SKSpriteNode(imageNamed: "ploppy")
 
     private let grassTexture = SKTexture(imageNamed: "grassStrip")
+    private let appleCoreTexture = SKTexture(imageNamed: "appleCore")
 
     private let hillTextures: [String: SKTexture] = [
         "hill1": SKTexture(imageNamed: "hill1"),
@@ -98,21 +108,80 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         SKPhysicsBody?
 
     private var grassNodes: [SKSpriteNode] = []
+    private var groundFillNode: SKSpriteNode?
     private var skyCloudNodes: [SKShapeNode] = []
     private var rearDistantHillNodes: [SKSpriteNode] = []
     private var distantHillNodes: [SKSpriteNode] = []
 
     private var scrollSpeed: CGFloat = 0
     private var previousUpdateTime: TimeInterval = 0
+    private var terrainRiseTestElapsedTime: TimeInterval = 0
+    private var terrainRiseOffset: CGFloat = 0
+    private var terrainRiseTargetOffset: CGFloat = 0
+    private var hasTriggeredTerrainRiseTest = false
+    private var isWitchEncounterActive = false
 
     private var isGameOver = false
+    private var pendingBlondieFlightHeights: [CGFloat] = []
 
     private let ploppyCategory: UInt32 = 1 << 0
     private let terrainCategory: UInt32 = 1 << 1
+    private let foodCategory: UInt32 = 1 << 2
+
+    private let blondieAppearanceHillNumbers:
+        Set<Int> = [19]
+    private let blondieSpeedMultiplier: CGFloat = 1.25
+    private let blondieWidthFraction: CGFloat = 0.14
+    private let blondieClearanceWait: TimeInterval = 2.1
+    private let blondiePassWait: TimeInterval = 1.5
+    private let witchWarningDuration: TimeInterval = 0.75
+    private let witchNightFadeDuration: TimeInterval = 2.1
+    private let witchWarningHeightFraction: CGFloat = 0.18
+    private let witchWarningRightMarginFraction: CGFloat = 0.02
 
     private let grassSinkBelowScreen: CGFloat = 16
     private let hillSinkBelowScreenFraction: CGFloat = 0.21
     private let grassOverlap: CGFloat = 4
+    private let grassGroundOverlapFraction: CGFloat = 0.40
+    private let appleCoreHeightFractionOfPloppy: CGFloat = 1.50
+    private let maximumAppleCoresOnScreen = 2
+    private let appleCoreSpawnDelayAfterHill: TimeInterval = 0.8
+
+    private let plannedAppleCoreLanes:
+        [Int: AppleCoreLane] = [
+            1: .low,
+            3: .middle,
+            8: .middle,
+            10: .low,
+            13: .high,
+            21: .low,
+            26: .high,
+            28: .middle,
+            32: .low,
+            37: .middle,
+            39: .low
+        ]
+    private let terrainRiseTestDelay: TimeInterval = 3.0
+    private let terrainRiseMaximumFraction: CGFloat = 0.12
+    private let terrainRiseSpeedFractionPerSecond: CGFloat = 0.008
+    private let maximumHillTopFraction: CGFloat = 0.72
+    private let minimumDoubleWitchCorridorFraction: CGFloat = 0.22
+
+    private let hillStartingTopFractions:
+        [String: CGFloat] = [
+            "hill1": 0.2378,
+            "hill2": 0.2378,
+            "hill3": 0.6400,
+            "hill4": 0.6400,
+            "hill5": 0.3598,
+            "hill6": 0.4683,
+            "hill7": 0.6400,
+            "hill8": 0.6400,
+            "hill9": 0.3895,
+            "hill10": 0.3693,
+            "hill11": 0.3693,
+            "hill12": 0.6193
+        ]
 
     private lazy var hillShadingShader: SKShader = {
 
@@ -122,6 +191,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 u_texture,
                 v_tex_coord
             );
+
+            if (originalColour.a < 0.001) {
+                discard;
+            }
 
             float lightFromAbove = mix(
                 0.78,
@@ -154,9 +227,29 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 lightFromLeft *
                 softHighlight;
 
+            float originalBrightness = dot(
+                originalColour.rgb,
+                vec3(0.299, 0.587, 0.114)
+            );
+
+            vec3 barrenTint = vec3(
+                0.44,
+                0.41,
+                0.37
+            );
+
+            vec3 barrenColour =
+                barrenTint *
+                mix(
+                    0.58,
+                    1.08,
+                    originalBrightness
+                );
+
             vec3 shadedColour =
-                originalColour.rgb *
-                combinedLight;
+                barrenColour *
+                combinedLight *
+                originalColour.a;
 
             gl_FragColor = vec4(
                 shadedColour,
@@ -174,6 +267,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         removeAllActions()
 
         grassNodes.removeAll()
+        groundFillNode = nil
         skyCloudNodes.removeAll()
         rearDistantHillNodes.removeAll()
         distantHillNodes.removeAll()
@@ -181,6 +275,12 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         isGameOver = false
         previousUpdateTime = 0
+        terrainRiseTestElapsedTime = 0
+        terrainRiseOffset = 0
+        terrainRiseTargetOffset = 0
+        hasTriggeredTerrainRiseTest = false
+        isWitchEncounterActive = false
+        pendingBlondieFlightHeights.removeAll()
 
         backgroundColor = .clear
         createSkyGradient()
@@ -189,12 +289,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         physicsWorld.gravity = CGVector(
             dx: 0,
-            dy: -1.5
+            dy: -3.616160625
         )
 
         physicsWorld.contactDelegate = self
 
         prepareTerrain()
+        createGroundFill()
         createContinuousGrass()
         createPloppy()
         startCountrysideLoop()
@@ -314,7 +415,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         createDistantHillLayer(
             name: "rearDistantHills",
             height: frame.height * 0.27,
-            colour: UIColor(red: 0.38, green: 0.58, blue: 0.73, alpha: 0.25),
+            colour: UIColor(red: 0.30, green: 0.30, blue: 0.29, alpha: 0.32),
             zPosition: -97,
             rearLayer: true
         )
@@ -322,7 +423,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         createDistantHillLayer(
             name: "distantHills",
             height: frame.height * 0.34,
-            colour: UIColor(red: 0.55, green: 0.69, blue: 0.79, alpha: 1.0),
+            colour: UIColor(red: 0.42, green: 0.40, blue: 0.37, alpha: 1.0),
             zPosition: -95,
             rearLayer: false
         )
@@ -503,6 +604,61 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             ploppyCategory
     }
 
+    private func createGroundFill() {
+
+        let groundFill = SKSpriteNode(
+            color: UIColor(
+                red: 0.34,
+                green: 0.32,
+                blue: 0.29,
+                alpha: 1
+            ),
+            size: CGSize(
+                width: frame.width + 8,
+                height:
+                    groundFillHeight(
+                        for:
+                            terrainRiseOffset
+                    )
+            )
+        )
+
+        groundFill.name = "groundFill"
+        groundFill.anchorPoint = CGPoint(
+            x: 0.5,
+            y: 0
+        )
+        groundFill.position = CGPoint(
+            x: frame.midX,
+            y: frame.minY
+        )
+        groundFill.zPosition = 0
+
+        addChild(groundFill)
+        groundFillNode = groundFill
+    }
+
+    private func groundFillHeight(
+        for riseOffset: CGFloat
+    ) -> CGFloat {
+
+        let grassBottomY =
+            frame.minY -
+            grassSinkBelowScreen +
+            riseOffset
+
+        let visibleGrassBaseY =
+            grassBottomY +
+            grassSize.height *
+            grassGroundOverlapFraction
+
+        return max(
+            1,
+            visibleGrassBaseY -
+                frame.minY
+        )
+    }
+
     private func createContinuousGrass() {
 
         let grassSpacing =
@@ -519,6 +675,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
             grassNode.name = "grass"
             grassNode.size = grassSize
+            grassNode.shader = hillShadingShader
 
             grassNode.anchorPoint = CGPoint(
                 x: 0,
@@ -569,6 +726,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         previousUpdateTime = currentTime
 
+        updateTerrainRiseTest(
+            by: timeSinceLastUpdate
+        )
+
         let movementDistance =
             scrollSpeed *
             CGFloat(timeSinceLastUpdate)
@@ -614,6 +775,149 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                     rightmostEdge -
                     grassOverlap
             }
+        }
+    }
+
+    private func updateTerrainRiseTest(
+        by elapsedTime: TimeInterval
+    ) {
+
+        terrainRiseTestElapsedTime +=
+            elapsedTime
+
+        if !hasTriggeredTerrainRiseTest,
+           terrainRiseTestElapsedTime >=
+            terrainRiseTestDelay {
+
+            hasTriggeredTerrainRiseTest = true
+
+            terrainRiseTargetOffset =
+                maximumSafeTerrainRise()
+        }
+
+        guard !isWitchEncounterActive else {
+            return
+        }
+
+        guard terrainRiseOffset <
+            terrainRiseTargetOffset else {
+            return
+        }
+
+        let riseThisFrame =
+            frame.height *
+            terrainRiseSpeedFractionPerSecond *
+            CGFloat(elapsedTime)
+
+        terrainRiseOffset =
+            min(
+                terrainRiseTargetOffset,
+                terrainRiseOffset +
+                    riseThisFrame
+            )
+
+        applyCurrentTerrainRise()
+    }
+
+    private func maximumSafeTerrainRise()
+        -> CGFloat {
+
+        let requestedMaximumRise =
+            frame.height *
+            terrainRiseMaximumFraction
+
+        let blondieHeight =
+            currentBlondieHeight()
+
+        let doubleWitchMargin =
+            frame.height * 0.02
+
+        let grassTopAtBaseLevel =
+            frame.minY -
+            grassSinkBelowScreen +
+            grassSize.height
+
+        let topWitchBottomEdge =
+            frame.maxY -
+            doubleWitchMargin -
+            blondieHeight
+
+        let bottomWitchTopEdgeAtBaseLevel =
+            grassTopAtBaseLevel +
+            doubleWitchMargin +
+            blondieHeight
+
+        let baseDoubleWitchCorridor =
+            topWitchBottomEdge -
+            bottomWitchTopEdgeAtBaseLevel
+
+        let minimumSafeCorridor =
+            frame.height *
+            minimumDoubleWitchCorridorFraction
+
+        let riseAllowedByWitches =
+            max(
+                0,
+                baseDoubleWitchCorridor -
+                    minimumSafeCorridor
+            )
+
+        return min(
+            requestedMaximumRise,
+            riseAllowedByWitches
+        )
+    }
+
+    private func applyCurrentTerrainRise() {
+
+        let raisedGrassY =
+            frame.minY -
+            grassSinkBelowScreen +
+            terrainRiseOffset
+
+        for grassNode in grassNodes {
+            grassNode.position.y =
+                raisedGrassY
+        }
+
+        groundFillNode?.size.height =
+            groundFillHeight(
+                for:
+                    terrainRiseOffset
+            )
+
+        enumerateChildNodes(
+            withName: "hill"
+        ) { hillNode, _ in
+
+            guard let baseYNumber =
+                hillNode.userData?[
+                    "terrainBaseY"
+                ] as? NSNumber,
+                  let maximumRiseNumber =
+                hillNode.userData?[
+                    "maximumTerrainRise"
+                ] as? NSNumber else {
+                return
+            }
+
+            let baseY =
+                CGFloat(
+                    baseYNumber.doubleValue
+                )
+
+            let maximumRise =
+                CGFloat(
+                    maximumRiseNumber
+                        .doubleValue
+                )
+
+            hillNode.position.y =
+                baseY +
+                min(
+                    self.terrainRiseOffset,
+                    maximumRise
+                )
         }
     }
 
@@ -704,7 +1008,23 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             y: frame.midY + 100
         )
 
-        ploppy.setScale(0.08)
+        ploppy.setScale(1)
+
+        let ploppyAspectRatio =
+            ploppy.size.width /
+            ploppy.size.height
+
+        let ploppyHeight =
+            frame.height * 0.10
+
+        ploppy.size = CGSize(
+            width:
+                ploppyHeight *
+                ploppyAspectRatio,
+            height:
+                ploppyHeight
+        )
+
         ploppy.zPosition = 10
 
         ploppy.physicsBody = SKPhysicsBody(
@@ -722,14 +1042,175 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             terrainCategory
 
         ploppy.physicsBody?.contactTestBitMask =
-            terrainCategory
+            terrainCategory |
+            foodCategory
 
         addChild(ploppy)
+    }
+
+    private func createAppleCoreIfSafe(
+        in lane: AppleCoreLane
+    ) {
+
+        guard !isGameOver else {
+            return
+        }
+
+        guard !isWitchEncounterActive else {
+            return
+        }
+
+        var currentAppleCoreCount = 0
+
+        enumerateChildNodes(
+            withName: "appleCore"
+        ) { _, _ in
+
+            currentAppleCoreCount += 1
+        }
+
+        guard currentAppleCoreCount <
+            maximumAppleCoresOnScreen else {
+            return
+        }
+
+        let appleCore = SKSpriteNode(
+            texture: appleCoreTexture
+        )
+
+        appleCore.name = "appleCore"
+
+        let appleCoreHeight =
+            ploppy.size.height *
+            appleCoreHeightFractionOfPloppy
+
+        let appleCoreAspectRatio =
+            appleCoreTexture.size().width /
+            appleCoreTexture.size().height
+
+        appleCore.size = CGSize(
+            width:
+                appleCoreHeight *
+                appleCoreAspectRatio,
+            height:
+                appleCoreHeight
+        )
+
+        let safeMargin =
+            frame.height * 0.02
+
+        let currentGrassTop =
+            frame.minY -
+            grassSinkBelowScreen +
+            terrainRiseOffset +
+            grassSize.height
+
+        let minimumSafeY =
+            currentGrassTop +
+            appleCore.size.height / 2 +
+            safeMargin
+
+        let maximumSafeY =
+            frame.maxY -
+            appleCore.size.height / 2 -
+            safeMargin
+
+        guard minimumSafeY <
+            maximumSafeY else {
+            return
+        }
+
+        let availableHeight =
+            maximumSafeY -
+            minimumSafeY
+
+        let appleCoreY: CGFloat
+
+        switch lane {
+
+        case .low:
+            appleCoreY =
+                minimumSafeY
+
+        case .middle:
+            appleCoreY =
+                minimumSafeY +
+                availableHeight * 0.45
+
+        case .high:
+            appleCoreY =
+                minimumSafeY +
+                availableHeight * 0.82
+        }
+
+        appleCore.position = CGPoint(
+            x: frame.maxX +
+                appleCore.size.width / 2,
+            y: appleCoreY
+        )
+
+        appleCore.zPosition = 8
+
+        let physicsBody = SKPhysicsBody(
+            texture: appleCoreTexture,
+            size: appleCore.size
+        )
+
+        physicsBody.isDynamic = false
+        physicsBody.affectedByGravity = false
+        physicsBody.categoryBitMask =
+            foodCategory
+        physicsBody.collisionBitMask = 0
+        physicsBody.contactTestBitMask =
+            ploppyCategory
+
+        appleCore.physicsBody = physicsBody
+
+        addChild(appleCore)
+
+        let finalX =
+            frame.minX -
+            appleCore.size.width / 2
+
+        let travelDistance =
+            frame.width +
+            appleCore.size.width
+
+        let travelDuration =
+            TimeInterval(
+                travelDistance /
+                scrollSpeed
+            )
+
+        let moveAppleCore =
+            SKAction.moveTo(
+                x: finalX,
+                duration: travelDuration
+            )
+
+        moveAppleCore.timingMode = .linear
+
+        appleCore.run(
+            SKAction.sequence([
+                moveAppleCore,
+                SKAction.removeFromParent()
+            ])
+        )
     }
 
     private func startCountrysideLoop() {
 
         var countrysideActions: [SKAction] = []
+
+        let numberOfWitches =
+            Int.random(in: 5...7)
+
+        let doubleWitchEventNumbers =
+            Set(
+                (0..<numberOfWitches)
+                    .shuffled()
+                    .prefix(2)
+            )
 
         for hillNumber in 0..<hillSequence.count {
 
@@ -738,6 +1219,143 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
             let hillInterval =
                 hillIntervals[hillNumber]
+
+            if blondieAppearanceHillNumbers
+                .contains(hillNumber) {
+
+                let beginWitchNight =
+                    SKAction.run { [weak self] in
+
+                        guard let self = self else {
+                            return
+                        }
+
+                        guard !self.isGameOver else {
+                            return
+                        }
+
+                        self.transitionToWitchNight()
+                    }
+
+                let waitForClearGrass =
+                    SKAction.wait(
+                        forDuration:
+                            blondieClearanceWait
+                    )
+
+                countrysideActions.append(
+                    beginWitchNight
+                )
+
+                countrysideActions.append(
+                    waitForClearGrass
+                )
+
+                let warningDurations =
+                    Array(
+                        repeating:
+                            witchWarningDuration,
+                        count:
+                            numberOfWitches
+                    )
+
+                for (
+                    witchNumber,
+                    warningDuration
+                ) in warningDurations.enumerated() {
+
+                    let isDoubleWitchEvent =
+                        doubleWitchEventNumbers
+                            .contains(witchNumber)
+
+                    let createWitchWarning =
+                        SKAction.run { [weak self] in
+
+                            guard let self = self else {
+                                return
+                            }
+
+                            guard !self.isGameOver else {
+                                return
+                            }
+
+                            self.prepareNextWitchWarning(
+                                duration: warningDuration,
+                                isDoubleWitchEvent:
+                                    isDoubleWitchEvent
+                            )
+                        }
+
+                    let waitForWitchWarning =
+                        SKAction.wait(
+                            forDuration:
+                                warningDuration
+                        )
+
+                    let createBlondie =
+                        SKAction.run { [weak self] in
+
+                            guard let self = self else {
+                                return
+                            }
+
+                            guard !self.isGameOver else {
+                                return
+                            }
+
+                            self.createAndScrollBlondies()
+                        }
+
+                    let isFinalWitch =
+                        witchNumber ==
+                        warningDurations.count - 1
+
+                    let timeBeforeNextWarning =
+                        isFinalWitch
+                        ? blondiePassWait
+                        : blondieTimeToReachPloppyNose()
+
+                    let waitAfterBlondieEnters =
+                        SKAction.wait(
+                            forDuration:
+                                timeBeforeNextWarning
+                        )
+
+                    countrysideActions.append(
+                        createWitchWarning
+                    )
+
+                    countrysideActions.append(
+                        waitForWitchWarning
+                    )
+
+                    countrysideActions.append(
+                        createBlondie
+                    )
+
+                    countrysideActions.append(
+                        waitAfterBlondieEnters
+                    )
+                }
+
+                let endWitchNight =
+                    SKAction.run { [weak self] in
+
+                        guard let self = self else {
+                            return
+                        }
+
+                        guard !self.isGameOver else {
+                            return
+                        }
+
+                        self.transitionBackToDaylight()
+                    }
+
+                countrysideActions.append(
+                    endWitchNight
+                )
+            }
 
             let createHill =
                 SKAction.run { [weak self] in
@@ -755,28 +1373,88 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                     )
                 }
 
-            let waitForNextHill =
-                SKAction.wait(
-                    forDuration: hillInterval
-                )
-
             countrysideActions.append(
                 createHill
             )
 
-            countrysideActions.append(
-                waitForNextHill
-            )
+            if let appleCoreLane =
+                plannedAppleCoreLanes[
+                    hillNumber
+                ],
+               hillInterval >
+                appleCoreSpawnDelayAfterHill {
+
+                let waitBeforeAppleCore =
+                    SKAction.wait(
+                        forDuration:
+                            appleCoreSpawnDelayAfterHill
+                    )
+
+                let createPlannedAppleCore =
+                    SKAction.run { [weak self] in
+
+                        guard let self = self else {
+                            return
+                        }
+
+                        self.createAppleCoreIfSafe(
+                            in: appleCoreLane
+                        )
+                    }
+
+                let waitAfterAppleCore =
+                    SKAction.wait(
+                        forDuration:
+                            hillInterval -
+                            appleCoreSpawnDelayAfterHill
+                    )
+
+                countrysideActions.append(
+                    waitBeforeAppleCore
+                )
+
+                countrysideActions.append(
+                    createPlannedAppleCore
+                )
+
+                countrysideActions.append(
+                    waitAfterAppleCore
+                )
+            } else {
+
+                let waitForNextHill =
+                    SKAction.wait(
+                        forDuration:
+                            hillInterval
+                    )
+
+                countrysideActions.append(
+                    waitForNextHill
+                )
+            }
         }
 
-        let countrysideCycle =
-            SKAction.sequence(
-                countrysideActions
-            )
+        let startNextCountrysideCycle =
+            SKAction.run { [weak self] in
+
+                guard let self = self else {
+                    return
+                }
+
+                guard !self.isGameOver else {
+                    return
+                }
+
+                self.startCountrysideLoop()
+            }
+
+        countrysideActions.append(
+            startNextCountrysideCycle
+        )
 
         run(
-            SKAction.repeatForever(
-                countrysideCycle
+            SKAction.sequence(
+                countrysideActions
             ),
             withKey: "countrysideLoop"
         )
@@ -807,12 +1485,62 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             frame.height *
             hillSinkBelowScreenFraction
 
+        let hillBaseY =
+            frame.minY +
+            hillNode.size.height / 2 -
+            hillSinkDistance
+
+        let startingTopFraction =
+            hillStartingTopFractions[
+                hillName
+            ] ?? maximumHillTopFraction
+
+        let startingTopY =
+            frame.minY +
+            frame.height *
+            startingTopFraction
+
+        let maximumTopY =
+            frame.minY +
+            frame.height *
+            maximumHillTopFraction
+
+        let maximumRiseForThisHill =
+            max(
+                0,
+                maximumTopY -
+                    startingTopY
+            )
+
+        let appliedRise =
+            min(
+                terrainRiseOffset,
+                maximumRiseForThisHill
+            )
+
         hillNode.position = CGPoint(
             x: frame.maxX +
                 hillNode.size.width / 2,
-            y: frame.minY +
-                hillNode.size.height / 2 -
-                hillSinkDistance
+            y: hillBaseY +
+                appliedRise
+        )
+
+        hillNode.userData =
+            NSMutableDictionary()
+
+        hillNode.userData?[
+            "terrainBaseY"
+        ] = NSNumber(
+            value: Double(hillBaseY)
+        )
+
+        hillNode.userData?[
+            "maximumTerrainRise"
+        ] = NSNumber(
+            value:
+                Double(
+                    maximumRiseForThisHill
+                )
         )
 
         hillNode.zPosition = 2
@@ -856,28 +1584,654 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         )
     }
 
+    private func transitionToWitchNight() {
+
+        isWitchEncounterActive = true
+
+        enumerateChildNodes(
+            withName: "appleCore"
+        ) { appleCore, _ in
+
+            appleCore.removeAllActions()
+            appleCore.removeFromParent()
+        }
+
+        childNode(
+            withName: "witchNightSky"
+        )?.removeFromParent()
+
+        childNode(
+            withName: "witchMoon"
+        )?.removeFromParent()
+
+        let nightColour = UIColor(
+            red: 0.025,
+            green: 0.045,
+            blue: 0.12,
+            alpha: 1
+        )
+
+        let nightSky = SKSpriteNode(
+            color: nightColour,
+            size: frame.size
+        )
+
+        nightSky.name = "witchNightSky"
+        nightSky.position = CGPoint(
+            x: frame.midX,
+            y: frame.midY
+        )
+        nightSky.alpha = 0
+        nightSky.zPosition = -99.5
+        addChild(nightSky)
+
+        nightSky.run(
+            SKAction.fadeIn(
+                withDuration:
+                    witchNightFadeDuration
+            )
+        )
+
+        createWitchMoon()
+
+        for cloud in skyCloudNodes {
+
+            let changeToNightCloud =
+                SKAction.run {
+
+                    cloud.fillColor = UIColor(
+                        red: 0.20,
+                        green: 0.22,
+                        blue: 0.27,
+                        alpha: 0.58
+                    )
+                }
+
+            cloud.run(
+                SKAction.sequence([
+                    SKAction.fadeOut(
+                        withDuration: 0.55
+                    ),
+                    changeToNightCloud,
+                    SKAction.fadeIn(
+                        withDuration: 0.75
+                    )
+                ])
+            )
+        }
+    }
+
+    private func createWitchMoon() {
+
+        let moon = SKNode()
+        moon.name = "witchMoon"
+        moon.position = CGPoint(
+            x: frame.minX +
+                frame.width * 0.20,
+            y: frame.minY +
+                frame.height * 0.80
+        )
+        moon.alpha = 0
+        moon.zPosition = -98.5
+
+        let moonRadius =
+            frame.height * 0.075
+
+        let crescentPath = CGMutablePath()
+
+        crescentPath.move(
+            to: CGPoint(
+                x: 0,
+                y: moonRadius
+            )
+        )
+
+        crescentPath.addArc(
+            center: .zero,
+            radius: moonRadius,
+            startAngle: .pi / 2,
+            endAngle: .pi * 1.5,
+            clockwise: false
+        )
+
+        crescentPath.addCurve(
+            to: CGPoint(
+                x: 0,
+                y: moonRadius
+            ),
+            control1: CGPoint(
+                x: -moonRadius * 0.48,
+                y: -moonRadius * 0.48
+            ),
+            control2: CGPoint(
+                x: -moonRadius * 0.48,
+                y: moonRadius * 0.48
+            )
+        )
+
+        crescentPath.closeSubpath()
+
+        let moonCrescent = SKShapeNode(
+            path: crescentPath
+        )
+
+        moonCrescent.fillColor = UIColor(
+            red: 0.82,
+            green: 0.86,
+            blue: 0.90,
+            alpha: 1
+        )
+        moonCrescent.strokeColor = .clear
+        moon.addChild(moonCrescent)
+
+        addChild(moon)
+
+        moon.run(
+            SKAction.fadeIn(
+                withDuration:
+                    witchNightFadeDuration
+            )
+        )
+    }
+
+    private func transitionBackToDaylight() {
+
+        isWitchEncounterActive = false
+
+        if let nightSky = childNode(
+            withName: "witchNightSky"
+        ) {
+
+            nightSky.run(
+                SKAction.sequence([
+                    SKAction.fadeOut(
+                        withDuration:
+                            witchNightFadeDuration
+                    ),
+                    SKAction.removeFromParent()
+                ])
+            )
+        }
+
+        if let moon = childNode(
+            withName: "witchMoon"
+        ) {
+
+            moon.run(
+                SKAction.sequence([
+                    SKAction.fadeOut(
+                        withDuration:
+                            witchNightFadeDuration
+                    ),
+                    SKAction.removeFromParent()
+                ])
+            )
+        }
+
+        for cloud in skyCloudNodes {
+
+            let changeToDayCloud =
+                SKAction.run {
+
+                    cloud.fillColor = UIColor(
+                        red: 0.94,
+                        green: 0.97,
+                        blue: 1.0,
+                        alpha: 0.15
+                    )
+                }
+
+            cloud.run(
+                SKAction.sequence([
+                    SKAction.fadeOut(
+                        withDuration: 0.55
+                    ),
+                    changeToDayCloud,
+                    SKAction.fadeIn(
+                        withDuration: 0.75
+                    )
+                ])
+            )
+        }
+    }
+
+    private func prepareNextWitchWarning(
+        duration: TimeInterval,
+        isDoubleWitchEvent: Bool
+    ) {
+
+        let flightHeights: [CGFloat]
+
+        if isDoubleWitchEvent,
+           canSafelyCreateDoubleWitchEvent() {
+
+            let safeHeightRange =
+                blondieFlightHeightRange(
+                    safetyMarginFraction:
+                        0.02
+                )
+
+            flightHeights = [
+                safeHeightRange.upperBound,
+                safeHeightRange.lowerBound
+            ]
+        } else {
+
+            flightHeights = [
+                randomBlondieFlightHeight()
+            ]
+        }
+
+        pendingBlondieFlightHeights =
+            flightHeights
+
+        for flightHeight in flightHeights {
+
+            createFlashingWitchWarning(
+                at: flightHeight,
+                duration: duration
+            )
+        }
+    }
+
+    private func randomBlondieFlightHeight()
+        -> CGFloat {
+
+        let safeHeightRange =
+            blondieFlightHeightRange()
+
+        return CGFloat.random(
+            in: safeHeightRange
+        )
+    }
+
+    private func blondieFlightHeightRange(
+        safetyMarginFraction: CGFloat = 0.06
+    )
+        -> ClosedRange<CGFloat> {
+
+        let blondieHeight =
+            currentBlondieHeight()
+
+        let grassTop =
+            frame.minY -
+            grassSinkBelowScreen +
+            grassSize.height +
+            terrainRiseOffset
+
+        let safetyMargin =
+            frame.height *
+            safetyMarginFraction
+
+        let minimumHeight =
+            grassTop +
+            blondieHeight / 2 +
+            safetyMargin
+
+        let maximumHeight =
+            frame.maxY -
+            blondieHeight / 2 -
+            safetyMargin
+
+        guard minimumHeight < maximumHeight else {
+            return frame.midY...frame.midY
+        }
+
+        return minimumHeight...maximumHeight
+    }
+
+    private func currentBlondieHeight()
+        -> CGFloat {
+
+        let blondieTexture = SKTexture(
+            imageNamed: "blondieWitch"
+        )
+
+        let blondieWidth =
+            frame.width *
+            blondieWidthFraction
+
+        let blondieAspectRatio =
+            blondieTexture.size().width /
+            blondieTexture.size().height
+
+        return
+            blondieWidth /
+            blondieAspectRatio
+    }
+
+    private func canSafelyCreateDoubleWitchEvent()
+        -> Bool {
+
+        let safeHeightRange =
+            blondieFlightHeightRange(
+                safetyMarginFraction:
+                    0.02
+            )
+
+        let corridorHeight =
+            safeHeightRange.upperBound -
+            safeHeightRange.lowerBound -
+            currentBlondieHeight()
+
+        let minimumSafeCorridor =
+            frame.height *
+            minimumDoubleWitchCorridorFraction
+
+        return corridorHeight >=
+            minimumSafeCorridor
+    }
+
+    private func blondieTimeToReachPloppyNose()
+        -> TimeInterval {
+
+        let blondieWidth =
+            frame.width *
+            blondieWidthFraction
+
+        let blondieStartingX =
+            frame.maxX +
+            blondieWidth / 2
+
+        let ploppyNoseX =
+            ploppy.frame.maxX
+
+        let distanceToPloppyNose =
+            max(
+                0,
+                blondieStartingX -
+                ploppyNoseX
+            )
+
+        let blondieSpeed =
+            scrollSpeed *
+            blondieSpeedMultiplier
+
+        guard blondieSpeed > 0 else {
+            return blondiePassWait
+        }
+
+        return TimeInterval(
+            distanceToPloppyNose /
+            blondieSpeed
+        )
+    }
+
+    private func createAndScrollBlondies() {
+
+        guard !pendingBlondieFlightHeights
+            .isEmpty else {
+            return
+        }
+
+        let flightHeights =
+            pendingBlondieFlightHeights
+
+        pendingBlondieFlightHeights
+            .removeAll()
+
+        for flightHeight in flightHeights {
+
+            createAndScrollBlondie(
+                at: flightHeight
+            )
+        }
+    }
+
+    private func createAndScrollBlondie(
+        at flightHeight: CGFloat
+    ) {
+
+        let blondieTexture = SKTexture(
+            imageNamed: "blondieWitch"
+        )
+
+        let blondie = SKSpriteNode(
+            texture: blondieTexture
+        )
+
+        blondie.name = "blondieWitch"
+
+        let blondieWidth =
+            frame.width *
+            blondieWidthFraction
+
+        let textureAspectRatio =
+            blondieTexture.size().width /
+            blondieTexture.size().height
+
+        blondie.size = CGSize(
+            width: blondieWidth,
+            height: blondieWidth /
+                textureAspectRatio
+        )
+
+        blondie.position = CGPoint(
+            x: frame.maxX +
+                blondie.size.width / 2,
+            y: flightHeight
+        )
+
+        blondie.zPosition = 9
+
+        let physicsBody = SKPhysicsBody(
+            texture: blondieTexture,
+            size: blondie.size
+        )
+
+        physicsBody.isDynamic = true
+        physicsBody.affectedByGravity = false
+        physicsBody.allowsRotation = false
+        physicsBody.usesPreciseCollisionDetection = true
+
+        physicsBody.categoryBitMask =
+            terrainCategory
+
+        physicsBody.collisionBitMask =
+            ploppyCategory
+
+        physicsBody.contactTestBitMask =
+            ploppyCategory
+
+        blondie.physicsBody = physicsBody
+
+        addChild(blondie)
+
+        let finalX =
+            frame.minX -
+            blondie.size.width / 2
+
+        let travelDistance =
+            frame.width +
+            blondie.size.width
+
+        let blondieSpeed =
+            scrollSpeed *
+            blondieSpeedMultiplier
+
+        let travelDuration =
+            TimeInterval(
+                travelDistance /
+                blondieSpeed
+            )
+
+        let moveBlondie =
+            SKAction.moveTo(
+                x: finalX,
+                duration: travelDuration
+            )
+
+        moveBlondie.timingMode = .linear
+
+        blondie.run(
+            SKAction.sequence([
+                moveBlondie,
+                SKAction.removeFromParent()
+            ])
+        )
+    }
+
+    private func createFlashingWitchWarning(
+        at flightHeight: CGFloat,
+        duration: TimeInterval
+    ) {
+
+        let warningTexture = SKTexture(
+            imageNamed: "witchWarning"
+        )
+
+        let warning = SKSpriteNode(
+            texture: warningTexture
+        )
+
+        warning.name = "witchWarning"
+
+        let warningHeight =
+            frame.height *
+            witchWarningHeightFraction
+
+        let warningAspectRatio =
+            warningTexture.size().width /
+            warningTexture.size().height
+
+        warning.size = CGSize(
+            width: warningHeight *
+                warningAspectRatio,
+            height: warningHeight
+        )
+
+        let rightMargin =
+            frame.width *
+            witchWarningRightMarginFraction
+
+        warning.position = CGPoint(
+            x: frame.maxX -
+                rightMargin -
+                warning.size.width / 2,
+            y: flightHeight
+        )
+
+        warning.zPosition = 30
+
+        addChild(warning)
+
+        let flashCount = 3
+
+        let halfFlashDuration =
+            duration /
+            TimeInterval(flashCount * 2)
+
+        let fadeOut = SKAction.fadeOut(
+            withDuration:
+                halfFlashDuration
+        )
+
+        let fadeIn = SKAction.fadeIn(
+            withDuration:
+                halfFlashDuration
+        )
+
+        let singleFlash = SKAction.sequence([
+            fadeOut,
+            fadeIn
+        ])
+
+        warning.run(
+            SKAction.sequence([
+                SKAction.repeat(
+                    singleFlash,
+                    count: flashCount
+                ),
+                SKAction.removeFromParent()
+            ])
+        )
+    }
+
     override func touchesBegan(
         _ touches: Set<UITouch>,
         with event: UIEvent?
     ) {
 
+        guard let touch = touches.first else {
+            return
+        }
+
+        let touchPosition =
+            touch.location(in: self)
+
+        if touchPosition.x < frame.midX {
+            performFart()
+        } else if touchPosition.y >=
+            frame.midY {
+            performUpperRightPooAction()
+        } else {
+            performLowerRightPooAction()
+        }
+    }
+
+    func handleFartInput() {
+        performFart()
+    }
+
+    func handleUpperRightPooInput() {
+        performUpperRightPooAction()
+    }
+
+    func handleLowerRightPooInput() {
+        performLowerRightPooAction()
+    }
+
+    private func performFart() {
+
         guard !isGameOver else {
             return
         }
 
-        ploppy.physicsBody?.velocity = CGVector(
-            dx: 0,
-            dy: 0
-        )
+        if let physicsBody = ploppy.physicsBody {
 
-        ploppy.physicsBody?.applyImpulse(
-            CGVector(
-                dx: 0,
-                dy: 110
+            if physicsBody.velocity.dy < 0 {
+
+                physicsBody.velocity = CGVector(
+                    dx: physicsBody.velocity.dx,
+                    dy: 0
+                )
+            }
+
+            physicsBody.applyImpulse(
+                CGVector(
+                    dx: 0,
+                    dy: 232.836733903935
+                )
             )
-        )
+
+            if physicsBody.velocity.dy > 331.2 {
+
+                physicsBody.velocity = CGVector(
+                    dx: physicsBody.velocity.dx,
+                    dy: 331.2
+                )
+            }
+        }
 
         createCloudTrail()
+    }
+
+    private func performUpperRightPooAction() {
+
+        guard !isGameOver else {
+            return
+        }
+
+        // The first poo colour will be added later.
+    }
+
+    private func performLowerRightPooAction() {
+
+        guard !isGameOver else {
+            return
+        }
+
+        // The second poo colour will be added later.
     }
 
     func didBegin(
@@ -887,6 +2241,24 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let contactedCategories =
             contact.bodyA.categoryBitMask |
             contact.bodyB.categoryBitMask
+
+        let foodContactCategories =
+            ploppyCategory |
+            foodCategory
+
+        if contactedCategories ==
+            foodContactCategories {
+
+            let foodBody =
+                contact.bodyA.categoryBitMask ==
+                    foodCategory
+                ? contact.bodyA
+                : contact.bodyB
+
+            foodBody.node?.removeAllActions()
+            foodBody.node?.removeFromParent()
+            return
+        }
 
         let requiredCategories =
             ploppyCategory |
@@ -923,6 +2295,30 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
             hillNode.removeAllActions()
             hillNode.physicsBody = nil
+        }
+
+        enumerateChildNodes(
+            withName: "blondieWitch"
+        ) { blondieNode, _ in
+
+            blondieNode.removeAllActions()
+            blondieNode.physicsBody = nil
+        }
+
+        enumerateChildNodes(
+            withName: "witchWarning"
+        ) { warningNode, _ in
+
+            warningNode.removeAllActions()
+            warningNode.removeFromParent()
+        }
+
+        enumerateChildNodes(
+            withName: "appleCore"
+        ) { appleCore, _ in
+
+            appleCore.removeAllActions()
+            appleCore.physicsBody = nil
         }
 
         ploppy.removeFromParent()
