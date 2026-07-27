@@ -11,10 +11,84 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         case high
     }
 
+    private enum FoodKind: String {
+        case apple
+        case cucumber
+        case corn
+    }
+
+    private struct TerrainLoweringEffect {
+        var amountRemaining: CGFloat
+        var timeRemaining: TimeInterval
+    }
+
+    private final class RestorationPatchState {
+        weak var terrainNode: SKSpriteNode?
+        let localPosition: CGPoint
+        var level: Int
+        let cropNode: SKCropNode
+        let gradientNode: SKSpriteNode
+
+        init(
+            terrainNode: SKSpriteNode,
+            localPosition: CGPoint,
+            cropNode: SKCropNode,
+            gradientNode: SKSpriteNode
+        ) {
+            self.terrainNode = terrainNode
+            self.localPosition = localPosition
+            self.level = 1
+            self.cropNode = cropNode
+            self.gradientNode = gradientNode
+        }
+    }
+
     private let ploppy = SKSpriteNode(imageNamed: "ploppy")
 
     private let grassTexture = SKTexture(imageNamed: "grassStrip")
     private let appleCoreTexture = SKTexture(imageNamed: "appleCore")
+    private let halfEatenCucumberTexture =
+        SKTexture(imageNamed: "halfEatenCucumber")
+    private let eatenCornCobTexture =
+        SKTexture(imageNamed: "eatenCornCob")
+    private let appleSeedTexture =
+        SKTexture(imageNamed: "appleSeed")
+    private let cucumberSeedTexture =
+        SKTexture(imageNamed: "cucumberSeed")
+    private let cornSeedTexture =
+        SKTexture(imageNamed: "cornSeed")
+
+    private let corruptedSkyTopColour =
+        UIColor(
+            red: 0.38,
+            green: 0.40,
+            blue: 0.42,
+            alpha: 1
+        )
+
+    private let corruptedSkyHorizonColour =
+        UIColor(
+            red: 0.68,
+            green: 0.69,
+            blue: 0.70,
+            alpha: 1
+        )
+
+    private let healthySkyTopColour =
+        UIColor(
+            red: 0.30,
+            green: 0.65,
+            blue: 0.88,
+            alpha: 1
+        )
+
+    private let healthySkyHorizonColour =
+        UIColor(
+            red: 0.73,
+            green: 0.88,
+            blue: 0.96,
+            alpha: 1
+        )
 
     private let hillTextures: [String: SKTexture] = [
         "hill1": SKTexture(imageNamed: "hill1"),
@@ -120,13 +194,25 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private var terrainRiseTargetOffset: CGFloat = 0
     private var hasTriggeredTerrainRiseTest = false
     private var isWitchEncounterActive = false
+    private var terrainRiseBeforeLake: CGFloat = 0
+    private var isPloppySkiddingOnLake = false
+    private var lakeWakeElapsedTime: TimeInterval = 0
+    private var terrainLoweringEffects:
+        [TerrainLoweringEffect] = []
+    private var restorationPatches:
+        [RestorationPatchState] = []
 
     private var isGameOver = false
     private var pendingBlondieFlightHeights: [CGFloat] = []
+    private var stomachSlots:
+        [FoodKind?] = [nil, nil]
+    private var stomachSeedNodes:
+        [SKSpriteNode?] = [nil, nil]
 
     private let ploppyCategory: UInt32 = 1 << 0
     private let terrainCategory: UInt32 = 1 << 1
     private let foodCategory: UInt32 = 1 << 2
+    private let droppedSeedCategory: UInt32 = 1 << 3
 
     private let blondieAppearanceHillNumbers:
         Set<Int> = [19]
@@ -134,8 +220,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private let blondieWidthFraction: CGFloat = 0.14
     private let blondieClearanceWait: TimeInterval = 2.1
     private let blondiePassWait: TimeInterval = 1.5
+    private let additionalWitchGap: TimeInterval = 0.35
     private let witchWarningDuration: TimeInterval = 0.75
     private let witchNightFadeDuration: TimeInterval = 2.1
+    private let lakeBankTransitionDuration: TimeInterval = 2.1
     private let witchWarningHeightFraction: CGFloat = 0.18
     private let witchWarningRightMarginFraction: CGFloat = 0.02
 
@@ -144,26 +232,58 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private let grassOverlap: CGFloat = 4
     private let grassGroundOverlapFraction: CGFloat = 0.40
     private let appleCoreHeightFractionOfPloppy: CGFloat = 1.50
-    private let maximumAppleCoresOnScreen = 2
+    private let cucumberHeightFractionOfPloppy: CGFloat = 0.70
+    private let cornCobHeightFractionOfPloppy: CGFloat = 0.42
+    private let droppedSeedLongDimensionFractionOfPloppy:
+        CGFloat = 0.64
+    private let maximumAppleCoresOnScreen = 3
     private let appleCoreSpawnDelayAfterHill: TimeInterval = 0.8
 
     private let plannedAppleCoreLanes:
         [Int: AppleCoreLane] = [
             1: .low,
             3: .middle,
+            4: .high,
+            6: .middle,
+            7: .low,
             8: .middle,
             10: .low,
             13: .high,
+            14: .high,
+            16: .middle,
+            18: .high,
             21: .low,
+            23: .middle,
+            25: .high,
             26: .high,
             28: .middle,
+            30: .low,
             32: .low,
+            35: .middle,
             37: .middle,
             39: .low
         ]
+    private let plannedCornCobLanes:
+        [Int: AppleCoreLane] = [
+            3: .high,
+            10: .middle,
+            15: .middle,
+            20: .high,
+            21: .middle,
+            28: .high,
+            31: .middle,
+            32: .middle,
+            33: .high,
+            37: .high
+        ]
     private let terrainRiseTestDelay: TimeInterval = 3.0
-    private let terrainRiseMaximumFraction: CGFloat = 0.12
-    private let terrainRiseSpeedFractionPerSecond: CGFloat = 0.008
+    private let terrainRiseMaximumFraction: CGFloat = 0.75
+    private let terrainRiseSpeedFractionPerSecond: CGFloat = 0.012
+    private let seedTerrainLoweringFraction: CGFloat = 0.016
+    private let seedTerrainLoweringDuration:
+        TimeInterval = 4.0 / 3.0
+    private let restorationCentimetreFraction:
+        CGFloat = 0.275
     private let maximumHillTopFraction: CGFloat = 0.72
     private let minimumDoubleWitchCorridorFraction: CGFloat = 0.22
 
@@ -280,7 +400,14 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         terrainRiseTargetOffset = 0
         hasTriggeredTerrainRiseTest = false
         isWitchEncounterActive = false
+        terrainRiseBeforeLake = 0
+        isPloppySkiddingOnLake = false
+        lakeWakeElapsedTime = 0
+        terrainLoweringEffects.removeAll()
+        restorationPatches.removeAll()
         pendingBlondieFlightHeights.removeAll()
+        stomachSlots = [nil, nil]
+        stomachSeedNodes = [nil, nil]
 
         backgroundColor = .clear
         createSkyGradient()
@@ -289,7 +416,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         physicsWorld.gravity = CGVector(
             dx: 0,
-            dy: -3.616160625
+            dy: -3.9777766875
         )
 
         physicsWorld.contactDelegate = self
@@ -306,8 +433,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let renderer = UIGraphicsImageRenderer(size: frame.size)
         let image = renderer.image { context in
             let colours = [
-                UIColor(red: 0.30, green: 0.65, blue: 0.88, alpha: 1).cgColor,
-                UIColor(red: 0.73, green: 0.88, blue: 0.96, alpha: 1).cgColor
+                corruptedSkyTopColour.cgColor,
+                corruptedSkyHorizonColour.cgColor
             ] as CFArray
 
             guard let gradient = CGGradient(
@@ -730,6 +857,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             by: timeSinceLastUpdate
         )
 
+        updateLakeSkid(
+            by: timeSinceLastUpdate
+        )
+
         let movementDistance =
             scrollSpeed *
             CGFloat(timeSinceLastUpdate)
@@ -799,6 +930,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             return
         }
 
+        if !terrainLoweringEffects.isEmpty {
+
+            updateTerrainLowering(
+                by: elapsedTime
+            )
+
+            return
+        }
+
         guard terrainRiseOffset <
             terrainRiseTargetOffset else {
             return
@@ -819,53 +959,101 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         applyCurrentTerrainRise()
     }
 
+    private func updateTerrainLowering(
+        by elapsedTime: TimeInterval
+    ) {
+
+        var totalLoweringThisFrame:
+            CGFloat = 0
+
+        for effectIndex in
+            terrainLoweringEffects.indices {
+
+            let effectTime =
+                terrainLoweringEffects[
+                    effectIndex
+                ].timeRemaining
+
+            guard effectTime > 0 else {
+                continue
+            }
+
+            let timeUsed =
+                min(
+                    elapsedTime,
+                    effectTime
+                )
+
+            let amountRemaining =
+                terrainLoweringEffects[
+                    effectIndex
+                ].amountRemaining
+
+            let amountThisFrame =
+                amountRemaining *
+                CGFloat(
+                    timeUsed /
+                    effectTime
+                )
+
+            totalLoweringThisFrame +=
+                amountThisFrame
+
+            terrainLoweringEffects[
+                effectIndex
+            ].amountRemaining =
+                max(
+                    0,
+                    amountRemaining -
+                        amountThisFrame
+                )
+
+            terrainLoweringEffects[
+                effectIndex
+            ].timeRemaining =
+                max(
+                    0,
+                    effectTime -
+                        timeUsed
+                )
+        }
+
+        terrainLoweringEffects.removeAll {
+            $0.timeRemaining <= 0
+        }
+
+        terrainRiseOffset =
+            max(
+                0,
+                terrainRiseOffset -
+                    totalLoweringThisFrame
+            )
+
+        applyCurrentTerrainRise()
+    }
+
+    private func beginSeedTerrainLowering() {
+
+        guard !isWitchEncounterActive else {
+            return
+        }
+
+        terrainLoweringEffects.append(
+            TerrainLoweringEffect(
+                amountRemaining:
+                    frame.height *
+                    seedTerrainLoweringFraction,
+                timeRemaining:
+                    seedTerrainLoweringDuration
+            )
+        )
+    }
+
     private func maximumSafeTerrainRise()
         -> CGFloat {
 
-        let requestedMaximumRise =
-            frame.height *
+        return frame.height *
             terrainRiseMaximumFraction
-
-        let blondieHeight =
-            currentBlondieHeight()
-
-        let doubleWitchMargin =
-            frame.height * 0.02
-
-        let grassTopAtBaseLevel =
-            frame.minY -
-            grassSinkBelowScreen +
-            grassSize.height
-
-        let topWitchBottomEdge =
-            frame.maxY -
-            doubleWitchMargin -
-            blondieHeight
-
-        let bottomWitchTopEdgeAtBaseLevel =
-            grassTopAtBaseLevel +
-            doubleWitchMargin +
-            blondieHeight
-
-        let baseDoubleWitchCorridor =
-            topWitchBottomEdge -
-            bottomWitchTopEdgeAtBaseLevel
-
-        let minimumSafeCorridor =
-            frame.height *
-            minimumDoubleWitchCorridorFraction
-
-        let riseAllowedByWitches =
-            max(
-                0,
-                baseDoubleWitchCorridor -
-                    minimumSafeCorridor
-            )
-
-        return min(
-            requestedMaximumRise,
-            riseAllowedByWitches
-        )
     }
 
     private func applyCurrentTerrainRise() {
@@ -999,6 +1187,23 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 )
             }
         }
+
+        ploppy.position.x =
+            frame.minX + 180
+
+        if let physicsBody =
+            ploppy.physicsBody,
+           physicsBody.velocity.dx != 0 {
+
+            physicsBody.velocity =
+                CGVector(
+                    dx: 0,
+                    dy:
+                        physicsBody.velocity.dy
+                )
+        }
+
+        removeFoodOverlappingTerrain()
     }
 
     private func createPloppy() {
@@ -1049,7 +1254,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     private func createAppleCoreIfSafe(
-        in lane: AppleCoreLane
+        in lane: AppleCoreLane,
+        horizontalOffset: CGFloat = 0,
+        forcedFoodKind: FoodKind? = nil
     ) {
 
         guard !isGameOver else {
@@ -1074,19 +1281,62 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             return
         }
 
+        let foodKind: FoodKind
+
+        if let forcedFoodKind =
+            forcedFoodKind {
+
+            foodKind =
+                forcedFoodKind
+        } else {
+
+            foodKind =
+                Bool.random()
+                ? .cucumber
+                : .apple
+        }
+
+        let foodTexture: SKTexture
+        let foodHeightFraction:
+            CGFloat
+
+        switch foodKind {
+
+        case .apple:
+            foodTexture =
+                appleCoreTexture
+            foodHeightFraction =
+                appleCoreHeightFractionOfPloppy
+
+        case .cucumber:
+            foodTexture =
+                halfEatenCucumberTexture
+            foodHeightFraction =
+                cucumberHeightFractionOfPloppy
+
+        case .corn:
+            foodTexture =
+                eatenCornCobTexture
+            foodHeightFraction =
+                cornCobHeightFractionOfPloppy
+        }
+
         let appleCore = SKSpriteNode(
-            texture: appleCoreTexture
+            texture: foodTexture
         )
 
         appleCore.name = "appleCore"
+        appleCore.userData = NSMutableDictionary()
+        appleCore.userData?["foodKind"] =
+            foodKind.rawValue
 
         let appleCoreHeight =
             ploppy.size.height *
-            appleCoreHeightFractionOfPloppy
+            foodHeightFraction
 
         let appleCoreAspectRatio =
-            appleCoreTexture.size().width /
-            appleCoreTexture.size().height
+            foodTexture.size().width /
+            foodTexture.size().height
 
         appleCore.size = CGSize(
             width:
@@ -1145,14 +1395,23 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         appleCore.position = CGPoint(
             x: frame.maxX +
-                appleCore.size.width / 2,
+                appleCore.size.width / 2 +
+                horizontalOffset,
             y: appleCoreY
         )
+
+        guard !foodIntersectsTerrain(
+            appleCore,
+            safetyMargin:
+                safeMargin
+        ) else {
+            return
+        }
 
         appleCore.zPosition = 8
 
         let physicsBody = SKPhysicsBody(
-            texture: appleCoreTexture,
+            texture: foodTexture,
             size: appleCore.size
         )
 
@@ -1173,8 +1432,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             appleCore.size.width / 2
 
         let travelDistance =
-            frame.width +
-            appleCore.size.width
+            appleCore.position.x -
+            finalX
 
         let travelDuration =
             TimeInterval(
@@ -1196,6 +1455,61 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 SKAction.removeFromParent()
             ])
         )
+    }
+
+    private func foodIntersectsTerrain(
+        _ foodNode: SKSpriteNode,
+        safetyMargin: CGFloat
+    ) -> Bool {
+
+        let safetyFrame =
+            foodNode.frame.insetBy(
+                dx: -safetyMargin,
+                dy: -safetyMargin
+            )
+
+        var intersectsTerrain =
+            false
+
+        physicsWorld.enumerateBodies(
+            in: safetyFrame
+        ) { physicsBody, stop in
+
+            if physicsBody.categoryBitMask &
+                self.terrainCategory != 0 {
+
+                intersectsTerrain = true
+                stop.pointee = true
+            }
+        }
+
+        return intersectsTerrain
+    }
+
+    private func removeFoodOverlappingTerrain() {
+
+        let safeMargin =
+            frame.height * 0.02
+
+        enumerateChildNodes(
+            withName: "appleCore"
+        ) { foodNode, _ in
+
+            guard let foodSprite =
+                foodNode as? SKSpriteNode else {
+                return
+            }
+
+            if self.foodIntersectsTerrain(
+                foodSprite,
+                safetyMargin:
+                    safeMargin
+            ) {
+
+                foodSprite.removeAllActions()
+                foodSprite.removeFromParent()
+            }
+        }
     }
 
     private func startCountrysideLoop() {
@@ -1313,7 +1627,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                     let timeBeforeNextWarning =
                         isFinalWitch
                         ? blondiePassWait
-                        : blondieTimeToReachPloppyNose()
+                        : blondieTimeToReachPloppyNose() +
+                            additionalWitchGap
 
                     let waitAfterBlondieEnters =
                         SKAction.wait(
@@ -1355,6 +1670,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 countrysideActions.append(
                     endWitchNight
                 )
+
+                countrysideActions.append(
+                    SKAction.wait(
+                        forDuration:
+                            lakeBankTransitionDuration
+                    )
+                )
             }
 
             let createHill =
@@ -1377,10 +1699,18 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 createHill
             )
 
-            if let appleCoreLane =
+            let plannedAppleOrCucumberLane =
                 plannedAppleCoreLanes[
                     hillNumber
-                ],
+                ]
+
+            let plannedCornLane =
+                plannedCornCobLanes[
+                    hillNumber
+                ]
+
+            if plannedAppleOrCucumberLane != nil ||
+                plannedCornLane != nil,
                hillInterval >
                 appleCoreSpawnDelayAfterHill {
 
@@ -1397,9 +1727,32 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                             return
                         }
 
-                        self.createAppleCoreIfSafe(
-                            in: appleCoreLane
-                        )
+                        if let appleOrCucumberLane =
+                            plannedAppleOrCucumberLane {
+
+                            self.createAppleCoreIfSafe(
+                                in:
+                                    appleOrCucumberLane
+                            )
+                        }
+
+                        if let cornLane =
+                            plannedCornLane {
+
+                            let cornHorizontalOffset:
+                                CGFloat =
+                                plannedAppleOrCucumberLane == nil
+                                ? 0
+                                : self.frame.width * 0.22
+
+                            self.createAppleCoreIfSafe(
+                                in: cornLane,
+                                horizontalOffset:
+                                    cornHorizontalOffset,
+                                forcedFoodKind:
+                                    .corn
+                            )
+                        }
                     }
 
                 let waitAfterAppleCore =
@@ -1587,6 +1940,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private func transitionToWitchNight() {
 
         isWitchEncounterActive = true
+        terrainRiseBeforeLake =
+            terrainRiseOffset
+        terrainRiseOffset = 0
+        applyCurrentTerrainRise()
+        createSmoothWitchLake()
 
         enumerateChildNodes(
             withName: "appleCore"
@@ -1736,7 +2094,34 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private func transitionBackToDaylight() {
 
-        isWitchEncounterActive = false
+        isPloppySkiddingOnLake = false
+        lakeWakeElapsedTime = 0
+        createLakeBank(
+            descendingIntoLake: false
+        )
+        liftPloppyWithReturningBank()
+
+        run(
+            SKAction.sequence([
+                SKAction.wait(
+                    forDuration:
+                        lakeBankTransitionDuration
+                ),
+                SKAction.run { [weak self] in
+
+                    guard let self = self else {
+                        return
+                    }
+
+                    guard !self.isGameOver else {
+                        return
+                    }
+
+                    self.completeLakeExitTransition()
+                }
+            ]),
+            withKey: "lakeExitTransition"
+        )
 
         if let nightSky = childNode(
             withName: "witchNightSky"
@@ -1790,6 +2175,568 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                     SKAction.fadeIn(
                         withDuration: 0.75
                     )
+                ])
+            )
+        }
+    }
+
+    private func lakeSurfaceY()
+        -> CGFloat {
+
+        return frame.minY -
+            grassSinkBelowScreen +
+            grassSize.height
+    }
+
+    private func createSmoothWitchLake() {
+
+        childNode(
+            withName: "witchLake"
+        )?.removeFromParent()
+
+        for grassNode in grassNodes {
+            grassNode.alpha = 0
+            grassNode.physicsBody = nil
+        }
+
+        enumerateChildNodes(
+            withName: "hill"
+        ) { hillNode, _ in
+
+            hillNode.physicsBody = nil
+        }
+
+        groundFillNode?.alpha = 0
+
+        let surfaceY =
+            lakeSurfaceY()
+
+        let waterHeight =
+            max(
+                1,
+                surfaceY -
+                frame.minY
+            )
+
+        let lake = SKSpriteNode(
+            color:
+                UIColor(
+                    red: 0.16,
+                    green: 0.53,
+                    blue: 0.72,
+                    alpha: 1
+                ),
+            size:
+                CGSize(
+                    width: frame.width * 1.06,
+                    height: waterHeight
+                )
+        )
+
+        lake.name = "witchLake"
+        lake.position = CGPoint(
+            x: frame.midX,
+            y:
+                frame.minY +
+                waterHeight / 2
+        )
+        lake.zPosition = 3
+
+        let lakeBody =
+            SKPhysicsBody(
+                rectangleOf:
+                    lake.size
+            )
+
+        lakeBody.isDynamic = false
+        lakeBody.categoryBitMask =
+            terrainCategory
+        lakeBody.collisionBitMask =
+            ploppyCategory |
+            droppedSeedCategory
+        lakeBody.contactTestBitMask =
+            ploppyCategory
+
+        lake.physicsBody = lakeBody
+
+        let smoothSurface = SKSpriteNode(
+            color:
+                UIColor(
+                    red: 0.72,
+                    green: 0.92,
+                    blue: 0.98,
+                    alpha: 0.92
+                ),
+            size:
+                CGSize(
+                    width: lake.size.width,
+                    height:
+                        max(
+                            2,
+                            frame.height * 0.006
+                        )
+                )
+        )
+
+        smoothSurface.position = CGPoint(
+            x: 0,
+            y:
+                lake.size.height / 2 -
+                smoothSurface.size.height / 2
+        )
+        smoothSurface.zPosition = 1
+        lake.addChild(smoothSurface)
+
+        addChild(lake)
+
+        createLakeBank(
+            descendingIntoLake: true
+        )
+    }
+
+    private func createLakeBank(
+        descendingIntoLake: Bool
+    ) {
+
+        let bankName =
+            descendingIntoLake
+            ? "lakeEntranceBank"
+            : "lakeExitBank"
+
+        childNode(
+            withName: bankName
+        )?.removeFromParent()
+
+        let bankWidth =
+            frame.width * 2
+
+        let lowSurface =
+            lakeSurfaceY() -
+            frame.minY
+
+        let highSurface =
+            lowSurface +
+            terrainRiseBeforeLake
+
+        let path = CGMutablePath()
+        path.move(
+            to: CGPoint(
+                x: 0,
+                y: 0
+            )
+        )
+
+        if descendingIntoLake {
+
+            path.addLine(
+                to: CGPoint(
+                    x: 0,
+                    y: highSurface
+                )
+            )
+            path.addLine(
+                to: CGPoint(
+                    x: frame.width,
+                    y: highSurface
+                )
+            )
+            path.addLine(
+                to: CGPoint(
+                    x: bankWidth,
+                    y: lowSurface
+                )
+            )
+        } else {
+
+            path.addLine(
+                to: CGPoint(
+                    x: 0,
+                    y: lowSurface
+                )
+            )
+            path.addLine(
+                to: CGPoint(
+                    x: frame.width,
+                    y: highSurface
+                )
+            )
+            path.addLine(
+                to: CGPoint(
+                    x: bankWidth,
+                    y: highSurface
+                )
+            )
+        }
+
+        path.addLine(
+            to: CGPoint(
+                x: bankWidth,
+                y: 0
+            )
+        )
+        path.closeSubpath()
+
+        let bank = SKShapeNode(
+            path: path
+        )
+
+        bank.name = bankName
+        bank.fillColor = UIColor(
+            red: 0.34,
+            green: 0.32,
+            blue: 0.28,
+            alpha: 1
+        )
+        bank.strokeColor = UIColor(
+            red: 0.36,
+            green: 0.48,
+            blue: 0.25,
+            alpha: 1
+        )
+        bank.lineWidth =
+            max(
+                3,
+                frame.height * 0.012
+            )
+        bank.zPosition = 4
+
+        if descendingIntoLake {
+
+            bank.position = CGPoint(
+                x: frame.minX,
+                y: frame.minY
+            )
+        } else {
+
+            bank.position = CGPoint(
+                x: frame.maxX,
+                y: frame.minY
+            )
+        }
+
+        addChild(bank)
+
+        let finalBankX =
+            descendingIntoLake
+            ? frame.minX - bankWidth
+            : frame.minX - frame.width
+
+        let moveBank =
+            SKAction.moveTo(
+                x: finalBankX,
+                duration:
+                    lakeBankTransitionDuration
+            )
+
+        moveBank.timingMode = .linear
+
+        bank.run(
+            SKAction.sequence([
+                moveBank,
+                SKAction.removeFromParent()
+            ])
+        )
+    }
+
+    private func liftPloppyWithReturningBank() {
+
+        guard let ploppyBody =
+            ploppy.physicsBody else {
+            return
+        }
+
+        let targetY =
+            frame.minY -
+            grassSinkBelowScreen +
+            grassSize.height +
+            terrainRiseBeforeLake +
+            ploppy.size.height / 2 +
+            frame.height * 0.012
+
+        guard ploppy.position.y <
+            targetY else {
+            return
+        }
+
+        let startingY =
+            ploppy.position.y
+
+        ploppyBody.velocity = .zero
+        ploppyBody.affectedByGravity =
+            false
+
+        let liftAction =
+            SKAction.customAction(
+                withDuration:
+                    lakeBankTransitionDuration
+            ) { node, elapsedTime in
+
+                let rawProgress =
+                    CGFloat(elapsedTime) /
+                    CGFloat(
+                        self.lakeBankTransitionDuration
+                    )
+
+                let progress =
+                    rawProgress *
+                    rawProgress *
+                    (3 - 2 * rawProgress)
+
+                node.position.y =
+                    startingY +
+                    (targetY - startingY) *
+                    progress
+            }
+
+        ploppy.run(
+            liftAction,
+            withKey: "lakeBankLift"
+        )
+    }
+
+    private func completeLakeExitTransition() {
+
+        isWitchEncounterActive = false
+        removeSmoothWitchLake()
+        terrainRiseOffset =
+            terrainRiseBeforeLake
+        applyCurrentTerrainRise()
+
+        if let ploppyBody =
+            ploppy.physicsBody {
+
+            ploppyBody.affectedByGravity =
+                true
+            ploppyBody.velocity =
+                CGVector(
+                    dx: 0,
+                    dy:
+                        max(
+                            ploppyBody.velocity.dy,
+                            25
+                        )
+                )
+        }
+    }
+
+    private func removeSmoothWitchLake() {
+
+        childNode(
+            withName: "witchLake"
+        )?.removeFromParent()
+
+        childNode(
+            withName: "lakeEntranceBank"
+        )?.removeFromParent()
+
+        childNode(
+            withName: "lakeExitBank"
+        )?.removeFromParent()
+
+        for grassNode in grassNodes {
+
+            grassNode.alpha = 1
+
+            if let preparedBody =
+                grassPhysicsBodyTemplate?.copy()
+                    as? SKPhysicsBody {
+
+                grassNode.physicsBody =
+                    preparedBody
+            }
+        }
+
+        groundFillNode?.alpha = 1
+    }
+
+    private func beginLakeSkid() {
+
+        guard isWitchEncounterActive else {
+            return
+        }
+
+        isPloppySkiddingOnLake = true
+        lakeWakeElapsedTime = 0
+
+        if let ploppyBody =
+            ploppy.physicsBody {
+
+            ploppyBody.velocity =
+                CGVector(
+                    dx:
+                        ploppyBody.velocity.dx,
+                    dy: 0
+                )
+        }
+
+        ploppy.position.y =
+            lakeSurfaceY() +
+            ploppy.size.height / 2
+
+        createLakeWake(
+            particleCount: 10
+        )
+    }
+
+    private func updateLakeSkid(
+        by elapsedTime: TimeInterval
+    ) {
+
+        guard isWitchEncounterActive,
+              isPloppySkiddingOnLake,
+              let ploppyBody =
+            ploppy.physicsBody else {
+            return
+        }
+
+        if ploppyBody.velocity.dy > 12 {
+            isPloppySkiddingOnLake = false
+            return
+        }
+
+        let minimumPloppyY =
+            lakeSurfaceY() +
+            ploppy.size.height / 2
+
+        ploppy.position.y =
+            max(
+                ploppy.position.y,
+                minimumPloppyY
+            )
+
+        if ploppy.position.y >
+            minimumPloppyY +
+            frame.height * 0.025 {
+
+            isPloppySkiddingOnLake = false
+            return
+        }
+
+        ploppyBody.velocity =
+            CGVector(
+                dx:
+                    ploppyBody.velocity.dx,
+                dy: 0
+            )
+
+        lakeWakeElapsedTime +=
+            elapsedTime
+
+        if lakeWakeElapsedTime >= 0.075 {
+
+            lakeWakeElapsedTime = 0
+
+            createLakeWake(
+                particleCount: 3
+            )
+        }
+    }
+
+    private func createLakeWake(
+        particleCount: Int
+    ) {
+
+        for particleNumber in
+            0..<particleCount {
+
+            let particleWidth =
+                CGFloat.random(
+                    in:
+                        (frame.height * 0.020)...(frame.height * 0.055)
+                )
+
+            let particleHeight =
+                CGFloat.random(
+                    in:
+                        (frame.height * 0.007)...(frame.height * 0.018)
+                )
+
+            let particleSize = CGSize(
+                width: particleWidth,
+                height: particleHeight
+            )
+
+            let spray = SKShapeNode(
+                ellipseOf:
+                    particleSize
+            )
+
+            spray.name = "lakeWake"
+            spray.fillColor =
+                particleNumber.isMultiple(of: 2)
+                ? UIColor(
+                    red: 0.92,
+                    green: 0.98,
+                    blue: 1.0,
+                    alpha: 0.92
+                )
+                : UIColor(
+                    red: 0.62,
+                    green: 0.86,
+                    blue: 0.96,
+                    alpha: 0.82
+                )
+            spray.strokeColor =
+                UIColor.clear
+            spray.position = CGPoint(
+                x:
+                    ploppy.frame.minX -
+                    CGFloat.random(
+                        in: 0...frame.height * 0.04
+                    ),
+                y:
+                    lakeSurfaceY() +
+                    CGFloat.random(
+                        in: 0...frame.height * 0.025
+                    )
+            )
+            spray.zPosition = 9
+
+            addChild(spray)
+
+            let travelDuration =
+                Double.random(
+                    in: 0.42...0.68
+                )
+
+            let wakeTravelX =
+                CGFloat.random(
+                    in:
+                        (frame.width * 0.07)...(frame.width * 0.16)
+                )
+
+            let wakeTravelY =
+                CGFloat.random(
+                    in:
+                        (frame.height * 0.015)...(frame.height * 0.065)
+                )
+
+            let sprayMovement =
+                SKAction.moveBy(
+                    x: -wakeTravelX,
+                    y: wakeTravelY,
+                    duration:
+                        travelDuration
+                )
+
+            sprayMovement.timingMode =
+                SKActionTimingMode.easeOut
+
+            spray.run(
+                SKAction.sequence([
+                    SKAction.group([
+                        sprayMovement,
+                        SKAction.fadeOut(
+                            withDuration:
+                                travelDuration
+                        ),
+                        SKAction.scale(
+                            to: 0.35,
+                            duration:
+                                travelDuration
+                        )
+                    ]),
+                    SKAction.removeFromParent()
                 ])
             )
         }
@@ -2200,7 +3147,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             physicsBody.applyImpulse(
                 CGVector(
                     dx: 0,
-                    dy: 232.836733903935
+                    dy: 307.926580587954
                 )
             )
 
@@ -2222,7 +3169,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             return
         }
 
-        // The first poo colour will be added later.
+        dropSeed(
+            from: 0
+        )
     }
 
     private func performLowerRightPooAction() {
@@ -2231,7 +3180,512 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             return
         }
 
-        // The second poo colour will be added later.
+        dropSeed(
+            from: 1
+        )
+    }
+
+    private func dropSeed(
+        from slot: Int
+    ) {
+
+        guard let foodKind =
+            stomachSlots[slot] else {
+            return
+        }
+
+        stomachSlots[slot] = nil
+        beginSeedTerrainLowering()
+
+        stomachSeedNodes[slot]?
+            .removeFromParent()
+
+        stomachSeedNodes[slot] = nil
+
+        let seedTexture: SKTexture
+
+        switch foodKind {
+
+        case .apple:
+            seedTexture =
+                appleSeedTexture
+
+        case .cucumber:
+            seedTexture =
+                cucumberSeedTexture
+
+        case .corn:
+            seedTexture =
+                cornSeedTexture
+        }
+
+        let droppedSeed = SKSpriteNode(
+            texture: seedTexture
+        )
+
+        let seedLongDimension =
+            ploppy.size.height *
+            droppedSeedLongDimensionFractionOfPloppy
+
+        let seedAspectRatio =
+            seedTexture.size().width /
+            seedTexture.size().height
+
+        droppedSeed.size = CGSize(
+            width:
+                seedLongDimension,
+            height:
+                seedLongDimension /
+                seedAspectRatio
+        )
+
+        droppedSeed.position = CGPoint(
+            x: ploppy.position.x,
+            y:
+                ploppy.frame.minY -
+                droppedSeed.size.height / 2 -
+                frame.height * 0.01
+        )
+
+        droppedSeed.name = "droppedSeed"
+        droppedSeed.alpha = 1
+        droppedSeed.zPosition = 12
+
+        let seedPhysicsBody =
+            SKPhysicsBody(
+                texture:
+                    seedTexture,
+                size:
+                    droppedSeed.size
+            )
+
+        seedPhysicsBody.isDynamic = true
+        seedPhysicsBody.affectedByGravity = true
+        seedPhysicsBody.allowsRotation = false
+        seedPhysicsBody.categoryBitMask =
+            droppedSeedCategory
+        seedPhysicsBody.collisionBitMask =
+            terrainCategory
+        seedPhysicsBody.contactTestBitMask =
+            terrainCategory
+        seedPhysicsBody.restitution = 0
+        seedPhysicsBody.friction = 0.85
+        seedPhysicsBody.linearDamping = 0.25
+        seedPhysicsBody.usesPreciseCollisionDetection =
+            true
+
+        seedPhysicsBody.velocity =
+            CGVector(
+                dx: 0,
+                dy: -55
+            )
+
+        droppedSeed.physicsBody =
+            seedPhysicsBody
+
+        addChild(droppedSeed)
+
+        let turnVertical =
+            SKAction.rotate(
+                toAngle: .pi / 2,
+                duration: 0.65,
+                shortestUnitArc: true
+            )
+
+        turnVertical.timingMode =
+            .easeInEaseOut
+
+        droppedSeed.run(
+            turnVertical
+        )
+    }
+
+    private func storeFood(
+        from foodNode: SKNode
+    ) -> Bool {
+
+        guard let emptySlot =
+            stomachSlots.firstIndex(
+                where: { $0 == nil }
+            ) else {
+            return false
+        }
+
+        guard let foodKindName =
+            foodNode.userData?["foodKind"]
+                as? String,
+              let foodKind =
+            FoodKind(rawValue: foodKindName) else {
+            return false
+        }
+
+        stomachSlots[emptySlot] =
+            foodKind
+
+        showStoredSeed(
+            foodKind,
+            in: emptySlot
+        )
+
+        return true
+    }
+
+    private func showStoredSeed(
+        _ foodKind: FoodKind,
+        in slot: Int
+    ) {
+
+        stomachSeedNodes[slot]?
+            .removeFromParent()
+
+        let seedTexture: SKTexture
+
+        switch foodKind {
+
+        case .apple:
+            seedTexture =
+                appleSeedTexture
+
+        case .cucumber:
+            seedTexture =
+                cucumberSeedTexture
+
+        case .corn:
+            seedTexture =
+                cornSeedTexture
+        }
+
+        let seedNode = SKSpriteNode(
+            texture: seedTexture
+        )
+
+        let seedHeight =
+            frame.height * 0.12
+
+        let seedAspectRatio =
+            seedTexture.size().width /
+            seedTexture.size().height
+
+        seedNode.size = CGSize(
+            width:
+                seedHeight *
+                seedAspectRatio,
+            height:
+                seedHeight
+        )
+
+        let edgeMargin =
+            frame.height * 0.035
+
+        seedNode.position.x =
+            frame.maxX -
+            edgeMargin -
+            seedNode.size.width / 2
+
+        if slot == 0 {
+
+            seedNode.position.y =
+                frame.maxY -
+                edgeMargin -
+                seedNode.size.height / 2
+        } else {
+
+            seedNode.position.y =
+                frame.minY +
+                edgeMargin +
+                seedNode.size.height / 2
+        }
+
+        seedNode.name =
+            slot == 0
+            ? "topStomachSeed"
+            : "bottomStomachSeed"
+
+        seedNode.alpha = 0.5
+        seedNode.zPosition = 40
+
+        addChild(seedNode)
+        stomachSeedNodes[slot] =
+            seedNode
+    }
+
+    private func handleDroppedSeedImpact(
+        seedNode: SKNode,
+        terrainNode: SKNode?,
+        contactPoint: CGPoint
+    ) {
+
+        seedNode.removeAllActions()
+        seedNode.physicsBody = nil
+        seedNode.removeFromParent()
+
+        guard let terrainSprite =
+            terrainNode as? SKSpriteNode else {
+            return
+        }
+
+        guard terrainSprite.name == "grass" ||
+            terrainSprite.name == "hill" else {
+            return
+        }
+
+        restorationPatches.removeAll {
+            $0.terrainNode == nil ||
+            $0.cropNode.parent == nil
+        }
+
+        let localImpactPoint =
+            terrainSprite.convert(
+                contactPoint,
+                from: self
+            )
+
+        if let existingPatch =
+            restorationPatches.first(
+                where: { patch in
+
+                    guard patch.terrainNode ===
+                        terrainSprite else {
+                        return false
+                    }
+
+                    let horizontalDistance =
+                        localImpactPoint.x -
+                        patch.localPosition.x
+
+                    let verticalDistance =
+                        localImpactPoint.y -
+                        patch.localPosition.y
+
+                    let distance =
+                        hypot(
+                            horizontalDistance,
+                            verticalDistance
+                        )
+
+                    return distance <=
+                        restorationCoreRadius(
+                            for:
+                                patch.level
+                        )
+                }
+            ) {
+
+            existingPatch.level += 1
+
+            updateRestorationPatch(
+                existingPatch
+            )
+
+            return
+        }
+
+        createRestorationPatch(
+            on: terrainSprite,
+            at: localImpactPoint
+        )
+    }
+
+    private func restorationCoreRadius(
+        for level: Int
+    ) -> CGFloat {
+
+        let centimetre =
+            frame.height *
+            restorationCentimetreFraction
+
+        return (
+            CGFloat(level) - 0.5
+        ) * centimetre
+    }
+
+    private func restorationOuterRadius(
+        for level: Int
+    ) -> CGFloat {
+
+        return restorationCoreRadius(
+            for: level
+        ) +
+            frame.height *
+            restorationCentimetreFraction
+    }
+
+    private func createRestorationPatch(
+        on terrainSprite: SKSpriteNode,
+        at localPosition: CGPoint
+    ) {
+
+        let cropNode = SKCropNode()
+        cropNode.position = .zero
+        cropNode.zPosition = 0.7
+
+        let terrainMask = SKSpriteNode(
+            texture:
+                terrainSprite.texture
+        )
+
+        terrainMask.size =
+            terrainSprite.size
+        terrainMask.anchorPoint =
+            terrainSprite.anchorPoint
+        terrainMask.position = .zero
+
+        cropNode.maskNode =
+            terrainMask
+
+        let gradientNode =
+            SKSpriteNode()
+
+        gradientNode.position =
+            localPosition
+        gradientNode.zPosition = 1
+
+        cropNode.addChild(
+            gradientNode
+        )
+
+        terrainSprite.addChild(
+            cropNode
+        )
+
+        let patch =
+            RestorationPatchState(
+                terrainNode:
+                    terrainSprite,
+                localPosition:
+                    localPosition,
+                cropNode:
+                    cropNode,
+                gradientNode:
+                    gradientNode
+            )
+
+        restorationPatches.append(
+            patch
+        )
+
+        updateRestorationPatch(
+            patch
+        )
+    }
+
+    private func updateRestorationPatch(
+        _ patch: RestorationPatchState
+    ) {
+
+        let coreRadius =
+            restorationCoreRadius(
+                for: patch.level
+            )
+
+        let outerRadius =
+            restorationOuterRadius(
+                for: patch.level
+            )
+
+        let coreFraction =
+            coreRadius /
+            outerRadius
+
+        patch.gradientNode.texture =
+            createRestorationGradientTexture(
+                coreFraction:
+                    coreFraction
+            )
+
+        patch.gradientNode.size =
+            CGSize(
+                width:
+                    outerRadius * 2,
+                height:
+                    outerRadius * 2
+            )
+    }
+
+    private func createRestorationGradientTexture(
+        coreFraction: CGFloat
+    ) -> SKTexture {
+
+        let textureSize = CGSize(
+            width: 256,
+            height: 256
+        )
+
+        let renderer =
+            UIGraphicsImageRenderer(
+                size: textureSize
+            )
+
+        let image = renderer.image {
+            context in
+
+            let green = UIColor(
+                red: 0.24,
+                green: 0.78,
+                blue: 0.31,
+                alpha: 1
+            )
+
+            let transparentGreen =
+                UIColor(
+                    red: 0.24,
+                    green: 0.78,
+                    blue: 0.31,
+                    alpha: 0
+                )
+
+            let colours = [
+                green.cgColor,
+                green.cgColor,
+                transparentGreen.cgColor
+            ] as CFArray
+
+            let locations: [CGFloat] = [
+                0,
+                coreFraction,
+                1
+            ]
+
+            guard let gradient =
+                CGGradient(
+                    colorsSpace:
+                        CGColorSpaceCreateDeviceRGB(),
+                    colors:
+                        colours,
+                    locations:
+                        locations
+                ) else {
+                return
+            }
+
+            let centre = CGPoint(
+                x: textureSize.width / 2,
+                y: textureSize.height / 2
+            )
+
+            context.cgContext
+                .drawRadialGradient(
+                    gradient,
+                    startCenter:
+                        centre,
+                    startRadius: 0,
+                    endCenter:
+                        centre,
+                    endRadius:
+                        textureSize.width / 2,
+                    options: []
+                )
+        }
+
+        let texture =
+            SKTexture(
+                image: image
+            )
+
+        texture.filteringMode =
+            .linear
+
+        return texture
     }
 
     func didBegin(
@@ -2241,6 +3695,41 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let contactedCategories =
             contact.bodyA.categoryBitMask |
             contact.bodyB.categoryBitMask
+
+        let droppedSeedTerrainCategories =
+            droppedSeedCategory |
+            terrainCategory
+
+        if contactedCategories ==
+            droppedSeedTerrainCategories {
+
+            let seedBody =
+                contact.bodyA.categoryBitMask ==
+                    droppedSeedCategory
+                ? contact.bodyA
+                : contact.bodyB
+
+            let terrainBody =
+                contact.bodyA.categoryBitMask ==
+                    terrainCategory
+                ? contact.bodyA
+                : contact.bodyB
+
+            if let seedNode =
+                seedBody.node {
+
+                handleDroppedSeedImpact(
+                    seedNode:
+                        seedNode,
+                    terrainNode:
+                        terrainBody.node,
+                    contactPoint:
+                        contact.contactPoint
+                )
+            }
+
+            return
+        }
 
         let foodContactCategories =
             ploppyCategory |
@@ -2255,8 +3744,19 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 ? contact.bodyA
                 : contact.bodyB
 
-            foodBody.node?.removeAllActions()
-            foodBody.node?.removeFromParent()
+            guard let foodNode =
+                foodBody.node else {
+                return
+            }
+
+            guard storeFood(
+                from: foodNode
+            ) else {
+                return
+            }
+
+            foodNode.removeAllActions()
+            foodNode.removeFromParent()
             return
         }
 
@@ -2265,6 +3765,33 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             terrainCategory
 
         if contactedCategories == requiredCategories {
+
+            if isWitchEncounterActive {
+
+                let touchedWitch =
+                    contact.bodyA.node?.name ==
+                        "blondieWitch" ||
+                    contact.bodyB.node?.name ==
+                        "blondieWitch"
+
+                if touchedWitch {
+                    killPloppy()
+                    return
+                }
+
+                let touchedLake =
+                    contact.bodyA.node?.name ==
+                        "witchLake" ||
+                    contact.bodyB.node?.name ==
+                        "witchLake"
+
+                if touchedLake {
+                    beginLakeSkid()
+                }
+
+                return
+            }
+
             killPloppy()
         }
     }
